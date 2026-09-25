@@ -6,6 +6,11 @@
 #   docker compose logs -f
 #   docker compose down
 # 容器内服务监听 8000，映射到宿主机同端口；健康检查见下方 healthcheck。
+#
+# 幂等缓存（SQLite）写入命名卷 reaction-cache（容器内 /data/reactions.db，
+# 路径由环境变量 REACTION_CACHE_DB 指定）：容器重启或 `docker compose up
+# --build` 重建后，配平记录、reaction_id 与成功/错误响应仍可恢复；
+# `docker compose down -v` 会连同该卷一并删除（清空全部缓存记录）。
 name: reaction-balancer
 
 services:
@@ -16,6 +21,12 @@ services:
     ports:
       # 宿主机 8000 -> 容器 8000；如需改端口，修改冒号左侧即可
       - "8000:8000"
+    environment:
+      # SQLite 持久缓存文件路径（镜像内默认值即此值，显式写出便于覆盖）
+      REACTION_CACHE_DB: /data/reactions.db
+    volumes:
+      # 命名卷：跨容器重启/重建保留全部配平缓存记录（LRU 上限 10000 条）
+      - reaction-cache:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
@@ -23,3 +34,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  reaction-cache:
+    # SQLite 幂等缓存持久卷：容器删除后数据仍保留，供新容器挂载恢复
+    name: reaction-balancer-cache

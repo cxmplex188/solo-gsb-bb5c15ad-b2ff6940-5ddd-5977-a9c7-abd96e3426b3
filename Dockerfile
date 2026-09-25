@@ -3,7 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    REACTION_CACHE_DB=/data/reactions.db
 
 WORKDIR /app
 
@@ -14,10 +15,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 再复制应用代码
 COPY app ./app
 
-# 容器内以非 root 用户运行
+# 容器内以非 root 用户运行；/data 挂载持久卷存放 SQLite 幂等缓存，
+# 使配平记录在容器重建/重启后仍可恢复（见 docker-compose.yml）。
 RUN useradd --create-home --uid 10001 appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /data \
+    && chown -R appuser:appuser /app /data
 USER appuser
+
+# SQLite 幂等缓存库所在目录；Compose 以命名卷挂载到此处。
+VOLUME ["/data"]
 
 EXPOSE 8000
 

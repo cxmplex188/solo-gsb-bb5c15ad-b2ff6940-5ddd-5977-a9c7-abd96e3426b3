@@ -55,13 +55,15 @@
     全部百分比容差（闭区间）与质量区间的整数计数，按总百分比绝对偏差、
     摩尔质量、C/H/N/O 计数依次升序返回前 20 个分子式（含各项计算百分比、
     匹配总数与截断标志），无解返回空列表；
-15. 对同一规范化反应做幂等缓存，重复请求返回相同的 `reaction_id` 与结果。
+15. 对同一规范化反应做幂等缓存：记录持久化到 SQLite（容器重启可恢复），
+    重复请求返回相同的 `reaction_id` 与结果，按最近访问 LRU 保留 10000 条。
 
 ---
 
 ## 1. 一条命令启动
 
-需要已安装 Docker 与 Docker Compose v2：
+需要已安装 Docker 与 Docker Compose v2，在本项目目录执行**一条命令**即可完成
+构建并后台启动：
 
 ```bash
 docker compose up --build -d
@@ -78,7 +80,15 @@ docker compose up --build -d
 > 想换宿主机端口：编辑 `docker-compose.yml` 的 `ports`，例如
 > `"9000:8000"` 后访问 9000 端口。容器内固定监听 8000。
 
-停止服务：
+**缓存持久卷**：幂等缓存（SQLite，库文件 `/data/reactions.db`，可由环境变量
+`REACTION_CACHE_DB` 覆盖）保存在 Compose 命名卷 `reaction-balancer-cache` 上。
+该卷的用途是让配平记录（`reaction_id`、成功结果与结构化错误、LRU 访问顺序）
+在**容器重启或镜像重建后仍可恢复**——重建容器后用
+`GET /api/v1/reactions/{reaction_id}` 仍能取回此前的结果。缓存按最近访问 LRU
+保留最近 10000 条；如需彻底清空缓存，执行
+`docker compose down -v`（会一并删除该命名卷），或删除卷内数据库文件后重启。
+
+停止服务（**不**删除缓存卷，记录保留）：
 
 ```bash
 docker compose down
@@ -225,6 +235,16 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+本地运行时缓存默认是**进程内内存库**（不跨重启保留）；如需像容器中一样
+持久化，设置环境变量指向数据库文件即可：
+
+```bash
+REACTION_CACHE_DB=./data/reactions.db uvicorn app.main:app --port 8000
+```
+
+启动时会自动建立表结构并校验存储版本；若数据库写入了当前代码无法识别的
+存储版本，服务会以明确错误拒绝启动（清空或迁移该缓存库后再启动）。
 
 运行测试：
 
@@ -1405,7 +1425,11 @@ curl -X POST .../api/v1/balance -d '{"reactants":["Ca(OH)2","HCl"],"products":["
 curl -X POST .../api/v1/balance -d '{"reactants":["Ca [OH]2"," HCl"],"products":["CaCl2","H2 O"]}'
 ```
 
-* 用 `GET /api/v1/reactions/{reaction_id}` 可随时取回缓存结果（LRU，默认 1 万条）。
+* 用 `GET /api/v1/reactions/{reaction_id}` 可随时取回缓存结果（SQLite
+  持久缓存，LRU 保留最近 10000 条；容器重启后仍可恢复，见第 1 节缓存卷说明）。
+* 每次取回（`GET` 命中或重复提交同一签名）都会刷新该记录的最近访问时间；
+  超过 10000 条时，**最久未被访问**的记录被淘汰。写入、访问时间更新与淘汰
+  在同一数据库事务内提交，并发请求或进程中断都不会留下半条记录。
 
 ---
 
@@ -1501,7 +1525,7 @@ LCM），热循环只剩整数乘加；自由变量最多 3 个、系数上限 3
 app/
   parser.py         递归下降化学式解析（元素/括号/电荷/电子）
   balancer.py       守恒矩阵、有理数 RREF、零空间、最小正整数、多变体枚举、守恒视图
-  cache.py          规范化签名（SHA-256）与 LRU 幂等缓存
+  cache.py          规范化签名（SHA-256）与 SQLite 持久 LRU 幂等缓存（事务化写入/访问/淘汰，启动校验存储版本）
   stoichiometry.py  投料量 -> 反应进度（正向批量计量）、目标产量 -> 最小反应进度/理论投料（反向规划）、投料+实际产量 -> 理论/实际/收率百分比（收率计算）与多步连续反应库存推演，Decimal/Fraction 精确计算
   equilibrium.py    理想溶液平衡组成：配平系数确定双向非负物料区间，Qc(ξ) 精确有理二分求 Qc=Kc 唯一内点（支持负进度），Fraction 精确计算（进度绝对误差 < 1e-9 mol）
   allocation.py     试剂批次 FEFO 领用分配：纯度换算有效物质、跨批拆分、过期/隔离跳过、未满足需求与汇总，Fraction 精确计算
