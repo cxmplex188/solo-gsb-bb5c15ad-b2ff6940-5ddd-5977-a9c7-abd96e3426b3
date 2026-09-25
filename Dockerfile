@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 再复制应用代码
 COPY app ./app
 
-# 容器内以非 root 用户运行
+# 容器内以非 root 用户运行；/app/data 为 SQLite 持久缓存目录（Compose 挂载命名卷）
 RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/data \
     && chown -R appuser:appuser /app
 USER appuser
 

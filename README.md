@@ -55,7 +55,8 @@
     全部百分比容差（闭区间）与质量区间的整数计数，按总百分比绝对偏差、
     摩尔质量、C/H/N/O 计数依次升序返回前 20 个分子式（含各项计算百分比、
     匹配总数与截断标志），无解返回空列表；
-15. 对同一规范化反应做幂等缓存，重复请求返回相同的 `reaction_id` 与结果。
+15. 对同一规范化反应做幂等缓存，重复请求返回相同的 `reaction_id` 与结果；
+    缓存落盘为 **SQLite 数据库**（命名卷持久化），容器重启后仍可命中。
 
 ---
 
@@ -77,6 +78,13 @@ docker compose up --build -d
 
 > 想换宿主机端口：编辑 `docker-compose.yml` 的 `ports`，例如
 > `"9000:8000"` 后访问 9000 端口。容器内固定监听 8000。
+
+**缓存卷**：首次启动时 Compose 会创建命名卷 `reaction-cache` 并挂载到容器
+`/app/data`，配平记录的 **SQLite 持久缓存**（`reaction_cache.db`）保存在
+其中——`docker compose down`、容器重启或重新构建后缓存仍然保留，
+`reaction_id` 依旧可查询；想连缓存一起清空用 `docker compose down -v`
+（只影响缓存命中率，不影响功能）。缓存上限 1 万条，超出后按 LRU 淘汰
+最久未访问的记录。
 
 停止服务：
 
@@ -225,6 +233,10 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+本地运行时持久缓存默认写到 `./data/reaction_cache.db`（自动建目录），可用
+环境变量 `REACTION_CACHE_DB` 改成其它路径（测试时可传 `:memory:` 退化为
+纯内存缓存）。
 
 运行测试：
 
@@ -1405,7 +1417,10 @@ curl -X POST .../api/v1/balance -d '{"reactants":["Ca(OH)2","HCl"],"products":["
 curl -X POST .../api/v1/balance -d '{"reactants":["Ca [OH]2"," HCl"],"products":["CaCl2","H2 O"]}'
 ```
 
-* 用 `GET /api/v1/reactions/{reaction_id}` 可随时取回缓存结果（LRU，默认 1 万条）。
+* 用 `GET /api/v1/reactions/{reaction_id}` 可随时取回缓存结果。缓存持久化在
+  SQLite 数据库中（Docker 部署时位于命名卷 `reaction-cache`，见第 1 节），
+  容器重启后仍可命中；容量上限 1 万条，超出后按 LRU 淘汰最久未访问的记录，
+  被淘汰或从未命中的 `reaction_id` 查询返回 `404 NOT_FOUND`。
 
 ---
 
@@ -1501,7 +1516,7 @@ LCM），热循环只剩整数乘加；自由变量最多 3 个、系数上限 3
 app/
   parser.py         递归下降化学式解析（元素/括号/电荷/电子）
   balancer.py       守恒矩阵、有理数 RREF、零空间、最小正整数、多变体枚举、守恒视图
-  cache.py          规范化签名（SHA-256）与 LRU 幂等缓存
+  cache.py          规范化签名（SHA-256）与 SQLite 持久化 LRU 幂等缓存（事务写入、读取刷新访问顺序、超上限淘汰最久未访问记录、启动校验存储版本）
   stoichiometry.py  投料量 -> 反应进度（正向批量计量）、目标产量 -> 最小反应进度/理论投料（反向规划）、投料+实际产量 -> 理论/实际/收率百分比（收率计算）与多步连续反应库存推演，Decimal/Fraction 精确计算
   equilibrium.py    理想溶液平衡组成：配平系数确定双向非负物料区间，Qc(ξ) 精确有理二分求 Qc=Kc 唯一内点（支持负进度），Fraction 精确计算（进度绝对误差 < 1e-9 mol）
   allocation.py     试剂批次 FEFO 领用分配：纯度换算有效物质、跨批拆分、过期/隔离跳过、未满足需求与汇总，Fraction 精确计算

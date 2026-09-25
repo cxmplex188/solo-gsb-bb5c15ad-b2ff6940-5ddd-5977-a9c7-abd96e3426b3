@@ -4,7 +4,8 @@
 #   docker compose up --build -d
 # 查看日志 / 停止：
 #   docker compose logs -f
-#   docker compose down
+#   docker compose down          # 保留缓存卷
+#   docker compose down -v       # 连缓存卷一起删除（清空配平缓存）
 # 容器内服务监听 8000，映射到宿主机同端口；健康检查见下方 healthcheck。
 name: reaction-balancer
 
@@ -16,6 +17,12 @@ services:
     ports:
       # 宿主机 8000 -> 容器 8000；如需改端口，修改冒号左侧即可
       - "8000:8000"
+    environment:
+      # SQLite 持久缓存文件位置（位于下方命名卷内）
+      - REACTION_CACHE_DB=/app/data/reaction_cache.db
+    volumes:
+      # 配平记录持久缓存：容器重启/重建后 reaction_id 仍可查询
+      - reaction-cache:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
@@ -23,3 +30,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  # 命名卷：保存配平记录的 SQLite 缓存（/app/data/reaction_cache.db）
+  reaction-cache:
