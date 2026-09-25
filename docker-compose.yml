@@ -1,0 +1,25 @@
+# 化学反应计量平衡服务 —— Docker Compose 编排。
+#
+# 构建并后台启动（首次或代码更新后）：
+#   docker compose up --build -d
+# 查看日志 / 停止：
+#   docker compose logs -f
+#   docker compose down
+# 容器内服务监听 8000，映射到宿主机同端口；健康检查见下方 healthcheck。
+name: reaction-balancer
+
+services:
+  stoich:
+    build: .
+    image: reaction-balancer:latest
+    container_name: reaction-balancer
+    ports:
+      # 宿主机 8000 -> 容器 8000；如需改端口，修改冒号左侧即可
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
